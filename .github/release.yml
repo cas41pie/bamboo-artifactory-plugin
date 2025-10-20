@@ -2,6 +2,9 @@ changelog:
   exclude:
     labels:
       - ignore for release
+      - dependencies
+      - maintenance
+      - documentation
   categories:
     - title: Breaking Changes 🚨
       labels:
@@ -9,12 +12,23 @@ changelog:
     - title: Exciting New Features 🎉
       labels:
         - new feature
+        - enhancement
     - title: Improvements 🌱
       labels:
         - improvement
+        - performance
     - title: Bug Fixes 🛠
       labels:
         - bug
+        - fix
+    - title: Security Updates 🔒
+      labels:
+        - security
+        - vulnerability
+    - title: Dependencies 📦
+      labels:
+        - dependencies
+        - dependency-update
     - title: Other Changes 📚
       labels:
         - "*"

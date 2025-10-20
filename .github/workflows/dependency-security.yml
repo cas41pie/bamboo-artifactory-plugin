@@ -1,0 +1,207 @@
+name: Dependency and Security Monitoring
+
+on:
+  schedule:
+    # Run weekly on Sundays at midnight
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+    paths:
+      - 'pom.xml'
+
+jobs:
+  dependency-check:
+    name: Security Vulnerability Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run OWASP Dependency Check
+        run: |
+          mvn org.owasp:dependency-check-maven:check \
+            -DfailBuildOnCVSS=7 \
+            -Dformat=ALL \
+            -DprettyPrint=true
+
+      - name: Upload dependency check results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-check-report
+          path: |
+            target/dependency-check-report.html
+            target/dependency-check-report.xml
+            target/dependency-check-report.json
+
+      - name: Upload SARIF results to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: target/dependency-check-report.sarif
+        continue-on-error: true
+
+  dependency-update:
+    name: Check for Dependency Updates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Check for dependency updates
+        run: |
+          mvn versions:display-dependency-updates -DprocessDependencyManagement=true > dependency-updates.txt
+          mvn versions:display-plugin-updates > plugin-updates.txt
+
+      - name: Check for property updates
+        run: |
+          mvn versions:display-property-updates > property-updates.txt || true
+
+      - name: Upload dependency update reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-updates
+          path: |
+            dependency-updates.txt
+            plugin-updates.txt
+            property-updates.txt
+
+      - name: Create issue for dependency updates
+        if: github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // Read the dependency update files
+            let dependencyUpdates = '';
+            let pluginUpdates = '';
+            let propertyUpdates = '';
+            
+            try {
+              dependencyUpdates = fs.readFileSync('dependency-updates.txt', 'utf8');
+              pluginUpdates = fs.readFileSync('plugin-updates.txt', 'utf8');
+              propertyUpdates = fs.readFileSync('property-updates.txt', 'utf8');
+            } catch (error) {
+              console.log('Could not read update files:', error.message);
+            }
+            
+            // Check if there are any updates available
+            const hasUpdates = dependencyUpdates.includes('The following dependencies') || 
+                             pluginUpdates.includes('The following plugin updates') ||
+                             propertyUpdates.includes('The following version property updates');
+            
+            if (hasUpdates) {
+              const today = new Date().toISOString().split('T')[0];
+              const issueTitle = `Dependency Updates Available - ${today}`;
+              
+              const issueBody = `## Automated Dependency Update Report
+              
+              This issue was automatically created to notify about available dependency updates.
+              
+              ### Dependency Updates
+              \`\`\`
+              ${dependencyUpdates}
+              \`\`\`
+              
+              ### Plugin Updates  
+              \`\`\`
+              ${pluginUpdates}
+              \`\`\`
+              
+              ### Property Updates
+              \`\`\`
+              ${propertyUpdates}
+              \`\`\`
+              
+              ---
+              
+              **Action Required:**
+              - Review the updates above
+              - Test compatibility with the new versions
+              - Create a PR to update dependencies if appropriate
+              - Close this issue once updates are applied or decided against
+              
+              **Note:** This is an automated report. Updates should be tested thoroughly before applying.`;
+              
+              // Check if a similar issue already exists (open)
+              const { data: existingIssues } = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                labels: 'dependencies'
+              });
+              
+              const existingIssue = existingIssues.find(issue => 
+                issue.title.includes('Dependency Updates Available')
+              );
+              
+              if (existingIssue) {
+                // Update existing issue
+                await github.rest.issues.updateIssue({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existingIssue.number,
+                  title: issueTitle,
+                  body: issueBody
+                });
+                console.log(`Updated existing issue #${existingIssue.number}`);
+              } else {
+                // Create new issue
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: issueTitle,
+                  body: issueBody,
+                  labels: ['dependencies', 'maintenance']
+                });
+                console.log('Created new dependency update issue');
+              }
+            } else {
+              console.log('No dependency updates available');
+            }
+
+  license-check:
+    name: License Compliance Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Generate license report
+        run: |
+          mvn license:add-third-party -Dlicense.excludedScopes=test
+          mvn license:download-licenses
+
+      - name: Upload license reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-reports
+          path: |
+            target/generated-sources/license/THIRD-PARTY.txt
+            target/licenses/
