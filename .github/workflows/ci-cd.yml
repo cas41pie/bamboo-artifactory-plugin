@@ -8,6 +8,10 @@ on:
   release:
     types: [ published ]
 
+env:
+  JFROG_MAVEN_REPO: "almpoc-mvn-snapshot-local"          # Maven repository for JAR and POM files
+  JFROG_GENERIC_REPO: "generic-local"      # Generic repository for OBR files
+
 jobs:
   test:
     name: Test
@@ -129,19 +133,124 @@ jobs:
           - **Date:** ${BUILD_DATE}
           - **Branch:** master
           - **Last Commit:** ${COMMIT_MSG}
+          - **Build Number:** ${{ github.run_number }}
           
           **Artifacts:**
+          Primary artifacts are deployed to Vanderlande JFrog Artifactory. GitHub releases serve as backup.
+          
           - \`bamboo-artifactory-plugin-${{ steps.version.outputs.version }}.jar\` - Main plugin JAR
           - \`bamboo-artifactory-plugin-${{ steps.version.outputs.version }}.obr\` - OSGi Bundle Repository
           - \`bamboo-artifactory-plugin-${{ steps.version.outputs.version }}-sources.jar\` - Source code
+          - \`bamboo-artifactory-plugin-${{ steps.version.outputs.version }}.pom\` - Maven POM file
+          
+          **JFrog Artifactory Locations:**
+          - **Maven Repository:** \`${{ env.JFROG_MAVEN_REPO }}/org/jfrog/bamboo/bamboo-artifactory-plugin/${{ steps.version.outputs.version }}/\`
+          - **Generic Repository:** \`${{ env.JFROG_GENERIC_REPO }}/bamboo-artifactory-plugin/${{ steps.version.outputs.version }}/\`
           
           **Installation:**
-          1. Download the \`.jar\` file from the assets below
+          1. Download the \`.jar\` file from Vanderlande JFrog Artifactory or GitHub assets below
           2. Install via Bamboo Administration → Manage apps → Upload app
           3. Restart your Bamboo instance if required
           
-          For full documentation, see the [Bamboo Artifactory Plugin User Guide](https://jfrog.com/help/r/jfrog-integrations-documentation/bamboo-artifactory-plug-in).
+          **Documentation:**
+          - [Bamboo Artifactory Plugin User Guide](https://jfrog.com/help/r/jfrog-integrations-documentation/bamboo-artifactory-plug-in)
+          - [Atlassian Marketplace](https://plugins.atlassian.com/plugin/details/27818)
           EOF
+
+      - name: Setup JFrog CLI
+        uses: jfrog/setup-jfrog-cli@v4
+        env:
+          JF_URL: ${{ secrets.JFROG_URL }}
+          JF_USER: ${{ secrets.JFROG_USERNAME }}
+          JF_PASSWORD: ${{ secrets.JFROG_API_KEY }}
+
+      - name: Verify JFrog Connection
+        run: |
+          echo "Testing connection to JFrog Artifactory..."
+          jf rt ping
+          echo "✅ JFrog connection successful"
+
+      - name: Upload Artifacts to JFrog Artifactory
+        run: |
+          echo "🚀 Uploading artifacts to Vanderlande JFrog Artifactory..."
+          
+          # Set build information
+          BUILD_NAME="${{ github.repository }}"
+          BUILD_NUMBER="${{ github.run_number }}"
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          
+          # Collect environment and Git information for build info
+          jf rt build-collect-env $BUILD_NAME $BUILD_NUMBER
+          jf rt build-add-git $BUILD_NAME $BUILD_NUMBER
+          
+          # Upload JAR files to Maven repository with proper Maven layout
+          echo "📦 Uploading JAR files to Maven repository..."
+          jf rt upload "release-artifacts/bamboo-artifactory-plugin-${{ steps.version.outputs.version }}.jar" \
+            "${{ env.JFROG_MAVEN_REPO }}/org/jfrog/bamboo/bamboo-artifactory-plugin/${{ steps.version.outputs.version }}/" \
+            --build-name="$BUILD_NAME" \
+            --build-number="$BUILD_NUMBER" \
+            --props="build.name=$BUILD_NAME;build.number=$BUILD_NUMBER;vcs.revision=$COMMIT_SHA;branch=${{ github.ref_name }}"
+          
+          # Upload sources JAR
+          if [ -f "release-artifacts/bamboo-artifactory-plugin-${{ steps.version.outputs.version }}-sources.jar" ]; then
+            echo "📦 Uploading sources JAR..."
+            jf rt upload "release-artifacts/bamboo-artifactory-plugin-${{ steps.version.outputs.version }}-sources.jar" \
+              "${{ env.JFROG_MAVEN_REPO }}/org/jfrog/bamboo/bamboo-artifactory-plugin/${{ steps.version.outputs.version }}/" \
+              --build-name="$BUILD_NAME" \
+              --build-number="$BUILD_NUMBER" \
+              --props="build.name=$BUILD_NAME;build.number=$BUILD_NUMBER;vcs.revision=$COMMIT_SHA;branch=${{ github.ref_name }}"
+          fi
+          
+          # Generate and upload POM file for Maven compatibility
+          echo "📦 Generating and uploading POM file..."
+          cat > release-artifacts/bamboo-artifactory-plugin-${{ steps.version.outputs.version }}.pom << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <project xmlns="http://maven.apache.org/POM/4.0.0"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+                   http://maven.apache.org/xsd/maven-4.0.0.xsd">
+              <modelVersion>4.0.0</modelVersion>
+              <groupId>org.jfrog.bamboo</groupId>
+              <artifactId>bamboo-artifactory-plugin</artifactId>
+              <version>${{ steps.version.outputs.version }}</version>
+              <packaging>atlassian-plugin</packaging>
+              <name>Bamboo Artifactory Plugin</name>
+              <description>Artifactory Build Info plugin for Atlassian Bamboo</description>
+              <url>https://github.com/${{ github.repository }}</url>
+              <scm>
+                  <url>https://github.com/${{ github.repository }}</url>
+                  <connection>scm:git:git@github.com:${{ github.repository }}.git</connection>
+              </scm>
+              <properties>
+                  <maven.compiler.source>17</maven.compiler.source>
+                  <maven.compiler.target>17</maven.compiler.target>
+                  <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+              </properties>
+          </project>
+          EOF
+          
+          # Upload POM file
+          jf rt upload "release-artifacts/bamboo-artifactory-plugin-${{ steps.version.outputs.version }}.pom" \
+            "${{ env.JFROG_MAVEN_REPO }}/org/jfrog/bamboo/bamboo-artifactory-plugin/${{ steps.version.outputs.version }}/" \
+            --build-name="$BUILD_NAME" \
+            --build-number="$BUILD_NUMBER" \
+            --props="build.name=$BUILD_NAME;build.number=$BUILD_NUMBER;vcs.revision=$COMMIT_SHA;branch=${{ github.ref_name }}"
+          
+          # Upload OBR files to Generic repository
+          echo "📦 Uploading OBR files to Generic repository..."
+          jf rt upload "release-artifacts/bamboo-artifactory-plugin-${{ steps.version.outputs.version }}.obr" \
+            "${{ env.JFROG_GENERIC_REPO }}/bamboo-artifactory-plugin/${{ steps.version.outputs.version }}/" \
+            --build-name="$BUILD_NAME" \
+            --build-number="$BUILD_NUMBER" \
+            --props="build.name=$BUILD_NAME;build.number=$BUILD_NUMBER;vcs.revision=$COMMIT_SHA;branch=${{ github.ref_name }}"
+          
+          # Publish build information to JFrog
+          echo "📊 Publishing build information..."
+          jf rt build-publish $BUILD_NAME $BUILD_NUMBER
+          
+          echo "✅ All artifacts successfully uploaded to Vanderlande JFrog Artifactory!"
+          echo "📍 Maven artifacts: ${{ env.JFROG_MAVEN_REPO }}/org/jfrog/bamboo/bamboo-artifactory-plugin/${{ steps.version.outputs.version }}/"
+          echo "📍 OBR artifacts: ${{ env.JFROG_GENERIC_REPO }}/bamboo-artifactory-plugin/${{ steps.version.outputs.version }}/"
 
       - name: Create/Update Release
         uses: ncipollo/release-action@v1
