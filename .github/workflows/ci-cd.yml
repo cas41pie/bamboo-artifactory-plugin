@@ -159,16 +159,56 @@ jobs:
 
       - name: Setup JFrog CLI
         uses: jfrog/setup-jfrog-cli@v4
-        env:
-          JF_URL: ${{ secrets.JFROG_URL }}
-          JF_USER: ${{ secrets.JFROG_USERNAME }}
-          JF_PASSWORD: ${{ secrets.JFROG_API_KEY }}
 
-      - name: Verify JFrog Connection
+      - name: Configure JFrog CLI Authentication
         run: |
-          echo "Testing connection to JFrog Artifactory..."
-          jf rt ping
-          echo "✅ JFrog connection successful"
+          echo "🔧 Configuring JFrog CLI authentication..."
+          
+          # Try different authentication approaches for better compatibility
+          
+          # Method 1: Configure with explicit server configuration
+          echo "📋 Attempting primary authentication method..."
+          jf config add vanderlande-jfrog \
+            --url="${{ secrets.JFROG_URL }}" \
+            --user="${{ secrets.JFROG_USERNAME }}" \
+            --password="${{ secrets.JFROG_API_KEY }}" \
+            --interactive=false \
+            --overwrite=true
+          
+          # Set the configured server as default
+          jf config use vanderlande-jfrog
+          
+          echo "✅ JFrog CLI configured successfully"
+
+      - name: Verify JFrog Connection and Debug
+        run: |
+          echo "🔍 Testing connection to Vanderlande JFrog Artifactory..."
+          
+          # Show configuration for debugging (without sensitive data)
+          echo "📋 Current JFrog CLI configuration:"
+          jf config show
+          
+          # Test connection with detailed output
+          echo "� Testing connection..."
+          if jf rt ping --server-id=vanderlande-jfrog; then
+            echo "✅ JFrog connection successful"
+          else
+            echo "❌ Primary connection failed, trying alternative authentication..."
+            
+            # Alternative method: Use environment variables directly
+            export JF_URL="${{ secrets.JFROG_URL }}"
+            export JF_USER="${{ secrets.JFROG_USERNAME }}"
+            export JF_PASSWORD="${{ secrets.JFROG_API_KEY }}"
+            
+            # Remove existing config and try again
+            jf config remove vanderlande-jfrog --quiet || true
+            
+            # Try with environment variable approach
+            echo "🔄 Attempting alternative authentication with environment variables..."
+            jf rt ping
+            
+            echo "✅ Alternative JFrog connection successful"
+          fi
 
       - name: Upload Artifacts to JFrog Artifactory
         run: |
@@ -180,8 +220,8 @@ jobs:
           COMMIT_SHA=$(git rev-parse --short HEAD)
           
           # Collect environment and Git information for build info
-          jf rt build-collect-env $BUILD_NAME $BUILD_NUMBER
-          jf rt build-add-git $BUILD_NAME $BUILD_NUMBER
+          jf rt build-collect-env $BUILD_NAME $BUILD_NUMBER --server-id=vanderlande-jfrog
+          jf rt build-add-git $BUILD_NAME $BUILD_NUMBER --server-id=vanderlande-jfrog
           
           # Upload JAR files to Maven repository with proper Maven layout
           echo "📦 Uploading JAR files to Maven repository..."
@@ -189,6 +229,7 @@ jobs:
             "${{ env.JFROG_MAVEN_REPO }}/org/jfrog/bamboo/bamboo-artifactory-plugin/${{ steps.version.outputs.version }}/" \
             --build-name="$BUILD_NAME" \
             --build-number="$BUILD_NUMBER" \
+            --server-id=vanderlande-jfrog \
             --props="build.name=$BUILD_NAME;build.number=$BUILD_NUMBER;vcs.revision=$COMMIT_SHA;branch=${{ github.ref_name }}"
           
           # Upload sources JAR
@@ -198,6 +239,7 @@ jobs:
               "${{ env.JFROG_MAVEN_REPO }}/org/jfrog/bamboo/bamboo-artifactory-plugin/${{ steps.version.outputs.version }}/" \
               --build-name="$BUILD_NAME" \
               --build-number="$BUILD_NUMBER" \
+              --server-id=vanderlande-jfrog \
               --props="build.name=$BUILD_NAME;build.number=$BUILD_NUMBER;vcs.revision=$COMMIT_SHA;branch=${{ github.ref_name }}"
           fi
           
@@ -234,6 +276,7 @@ jobs:
             "${{ env.JFROG_MAVEN_REPO }}/org/jfrog/bamboo/bamboo-artifactory-plugin/${{ steps.version.outputs.version }}/" \
             --build-name="$BUILD_NAME" \
             --build-number="$BUILD_NUMBER" \
+            --server-id=vanderlande-jfrog \
             --props="build.name=$BUILD_NAME;build.number=$BUILD_NUMBER;vcs.revision=$COMMIT_SHA;branch=${{ github.ref_name }}"
           
           # Upload OBR files to Generic repository
@@ -242,11 +285,12 @@ jobs:
             "${{ env.JFROG_GENERIC_REPO }}/bamboo-artifactory-plugin/${{ steps.version.outputs.version }}/" \
             --build-name="$BUILD_NAME" \
             --build-number="$BUILD_NUMBER" \
+            --server-id=vanderlande-jfrog \
             --props="build.name=$BUILD_NAME;build.number=$BUILD_NUMBER;vcs.revision=$COMMIT_SHA;branch=${{ github.ref_name }}"
           
           # Publish build information to JFrog
           echo "📊 Publishing build information..."
-          jf rt build-publish $BUILD_NAME $BUILD_NUMBER
+          jf rt build-publish $BUILD_NAME $BUILD_NUMBER --server-id=vanderlande-jfrog
           
           echo "✅ All artifacts successfully uploaded to Vanderlande JFrog Artifactory!"
           echo "📍 Maven artifacts: ${{ env.JFROG_MAVEN_REPO }}/org/jfrog/bamboo/bamboo-artifactory-plugin/${{ steps.version.outputs.version }}/"
